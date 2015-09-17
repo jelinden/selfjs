@@ -28,7 +28,7 @@ func readFile(filePath string) string {
 	return string(file)
 }
 
-func New(poolSize int, script string) http.Handler {
+func New(poolSize int, script string, data string) http.Handler {
 	bundle := bytes.NewBufferString(selfjs)
 	bundle.WriteString(script)
 
@@ -43,7 +43,7 @@ func New(poolSize int, script string) http.Handler {
 		worker := pool.get()
 		worker.ch = c
 		req := map[string]interface{}{"path": r.URL.Path}
-		msg := message{Fn: "beforeHandleRequest", Args: []interface{}{req}}
+		msg := message{Fn: "beforeHandleRequest", Args: []interface{}{req, data}}
 		sMsg, _ := json.Marshal(msg)
 		go worker.Send(string(sMsg))
 		res := <-c
@@ -61,13 +61,13 @@ $recv(function(msg) {
   this[pMsg.fn].apply(null, pMsg.args);
 });
 
-function beforeHandleRequest(req) {
+function beforeHandleRequest(req, data) {
   var res = {
     write: function(str) {
-      $send(str);
+      $send(str, data);
     }
   };
 
-  selfjs.handleRequest(req, res);
+  selfjs.handleRequest(req, res, data);
 }
 `
