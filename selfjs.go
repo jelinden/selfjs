@@ -9,6 +9,7 @@ import (
 	"path"
 	"runtime"
 
+	"github.com/labstack/echo"
 	"github.com/ry/v8worker"
 )
 
@@ -28,7 +29,32 @@ func readFile(filePath string) string {
 	return string(file)
 }
 
-func New(poolSize int, script string, data string) http.Handler {
+func New(poolSize int, script string, data interface{}) echo.HandlerFunc {
+	bundle := bytes.NewBufferString(selfjs)
+	bundle.WriteString(script)
+
+	pool := newPool(poolSize, func(w *Worker) {
+		if err := w.Load("bundle.js", bundle.String()); err != nil {
+			log.Panicf("error while loading js: %#v", err)
+		}
+	})
+	return func(c *echo.Context) error {
+		channel := make(chan string)
+		worker := pool.get()
+		worker.ch = channel
+		req := map[string]interface{}{"path": c.Request().URL.Path}
+		msg := message{Fn: "beforeHandleRequest", Args: []interface{}{req, data}}
+		sMsg, _ := json.Marshal(msg)
+		go worker.Send(string(sMsg))
+		res := <-channel
+		worker.ch = nil
+		pool.put(worker)
+		c.HTML(200, "%#s", string([]byte(res+"\n")))
+		return nil
+	}
+}
+
+func PageAsString(poolSize int, script string, data string, w http.ResponseWriter, r *http.Request) string {
 	bundle := bytes.NewBufferString(selfjs)
 	bundle.WriteString(script)
 
@@ -38,19 +64,17 @@ func New(poolSize int, script string, data string) http.Handler {
 		}
 	})
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c := make(chan string)
-		worker := pool.get()
-		worker.ch = c
-		req := map[string]interface{}{"path": r.URL.Path}
-		msg := message{Fn: "beforeHandleRequest", Args: []interface{}{req, data}}
-		sMsg, _ := json.Marshal(msg)
-		go worker.Send(string(sMsg))
-		res := <-c
-		worker.ch = nil
-		pool.put(worker)
-		w.Write([]byte(res + "\n"))
-	})
+	c := make(chan string)
+	worker := pool.get()
+	worker.ch = c
+	req := map[string]interface{}{"path": r.URL.Path}
+	msg := message{Fn: "beforeHandleRequest", Args: []interface{}{req, data}}
+	sMsg, _ := json.Marshal(msg)
+	go worker.Send(string(sMsg))
+	res := <-c
+	worker.ch = nil
+	pool.put(worker)
+	return res + "\n"
 }
 
 const selfjs = `
